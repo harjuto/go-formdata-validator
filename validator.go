@@ -6,17 +6,24 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"encoding/json"
 )
 
-type ValidateableFormData map[string]interface{}
-
-type TypeErrors struct {
-	errors []error
-}
+type (
+	ValidateableFormObject map[string]interface{}
+	ValidateableFormArray []ValidateableFormObject
+	Validateable interface {
+		Validate(schema reflect.Value, typeErrors *TypeErrors)
+	}
+	TypeErrors struct {
+		errors []error
+	}
+)
 
 func (t *TypeErrors) add(err error) {
 	t.errors = append(t.errors, err)
 }
+
 func (t TypeErrors) Error() string {
 	var errors string = ""
 	for _,err := range t.errors {
@@ -25,32 +32,68 @@ func (t TypeErrors) Error() string {
 	return errors
 }
 
-// Schema = The struct we validate against
-// fieldValue = The attempted interface we try to assign to schema field
-func (f ValidateableFormData) Validate(t interface{}) error {
+func (v ValidateableFormObject) Validate(schema reflect.Value, typeErrors *TypeErrors) {
+	validateFields(v, schema, typeErrors)
 
+}
+func (v ValidateableFormArray) Validate(schema reflect.Value, typeErrors *TypeErrors) {
+	for _, value := range v {
+		validateFields(value,  reflect.Indirect(reflect.New(schema.Type().Elem())), typeErrors)
+	}
+}
+
+func ValidateSchema(input []byte, output interface{}) error {
 	var typeErrors TypeErrors
 
-	if reflect.Indirect(reflect.ValueOf(t)).Kind() != reflect.Struct {
-		return errors.New("Form validator can only validate structs.")
+	var schemaValue = reflect.Indirect(reflect.ValueOf(output))
+
+	if schemaValue.Kind() != reflect.Struct && schemaValue.Kind() != reflect.Slice {
+		return errors.New(fmt.Sprintf("Form validator can only validate structs. Attempted to validate: %v", schemaValue.Kind()))
 	}
 
-	var schema reflect.Value = reflect.Indirect(reflect.ValueOf(t))
+	var object ValidateableFormObject
+	var array ValidateableFormArray
 
-	validateFields(f, schema, &typeErrors)
+	err := json.Unmarshal(input, &object)
+
+	if err != nil {
+		switch err.(type) {
+		case *json.UnmarshalTypeError:
+			if marshalErrorStruct, ok := err.(*json.UnmarshalTypeError); ok {
+				if marshalErrorStruct.Value == "array" {
+					err := json.Unmarshal(input, &array)
+					if err != nil {
+						return err
+					}
+					array.Validate(schemaValue, &typeErrors)
+				}
+				return err
+			}
+			return err
+		default:
+			return err
+		}
+	} else {
+		object.Validate(schemaValue, &typeErrors)
+	}
 
 	if len(typeErrors.errors) == 0 {
 		return nil
 	}
 
 	return typeErrors
+
 }
+
+
+
+
+
 
 func validateFields(fields map[string]interface{}, schema reflect.Value, typeErrors *TypeErrors) {
 
 	for key, value := range fields {
 		candidateField := reflect.ValueOf(value)
-
 		schemaField := schema.FieldByNameFunc( func(field string) bool {
 			return bytes.EqualFold([]byte(field), []byte(key))
 		})
@@ -66,7 +109,7 @@ func validateFields(fields map[string]interface{}, schema reflect.Value, typeErr
 func validateField(schemaField reflect.Value, candidateField reflect.Value, typeErrors *TypeErrors) error {
 
 	if schemaField.IsValid() {
-		log.Printf("Expected: %v - Candidate: %v", schemaField.Type().Name(), candidateField.Kind())
+		log.Printf("Expected: %v - Candidate: %v", schemaField.Type().Kind(), candidateField.Kind())
 
 		switch schemaField.Kind() {
 
@@ -86,6 +129,11 @@ func validateField(schemaField reflect.Value, candidateField reflect.Value, type
 				return errorMessage(candidateField, schemaField)
 			}
 
+		case reflect.Slice: {
+			if candidateField.Kind() != reflect.Slice {
+				return errorMessage(candidateField, schemaField)
+			}
+		}
 		case reflect.Struct:
 			validateFields(candidateField.Interface().(map[string]interface{}), schemaField, typeErrors)
 
