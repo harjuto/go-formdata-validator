@@ -12,7 +12,7 @@ Produces below json as a result
         "errors": [
             {
                 "field":"Phone",
-                "message":"Phone: Unexpected type: float64 - expected: string"
+                "message":"Phone: Unexpected type: numeric - expected: string"
             },
             {
                 "field":"Skills",
