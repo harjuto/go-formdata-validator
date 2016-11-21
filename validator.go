@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"log"
 	"encoding/json"
 )
 
@@ -16,21 +15,34 @@ type (
 		Validate(schema reflect.Value, typeErrors *TypeErrors)
 	}
 	TypeErrors struct {
-		errors []error
+		Errors []error `json:"errors"`
+	}
+	TypeError struct {
+		Field string `json:"field"`
+		Message string `json:"message"`
 	}
 )
 
 func (t *TypeErrors) add(err error) {
-	t.errors = append(t.errors, err)
+	t.Errors = append(t.Errors, err)
 }
 
 func (t TypeErrors) Error() string {
-	var errors string = ""
-	for _,err := range t.errors {
-		errors += err.Error()
+	jsonString, err := json.Marshal(t)
+	if err != nil {
+		return ""
 	}
-	return errors
+	return string(jsonString)
 }
+
+func NewTypeError(field, message string) error {
+	return &TypeError{Field: field, Message: message}
+}
+
+func (e *TypeError) Error() string {
+	return fmt.Sprintf("[%v] %v", e.Field, e.Message)
+}
+
 
 func (v ValidateableFormObject) Validate(schema reflect.Value, typeErrors *TypeErrors) {
 	validateFields(v, schema, typeErrors)
@@ -48,12 +60,11 @@ func ValidateSchema(input []byte, output interface{}) error {
 	var schemaValue = reflect.Indirect(reflect.ValueOf(output))
 
 	if schemaValue.Kind() != reflect.Struct && schemaValue.Kind() != reflect.Slice {
-		return errors.New(fmt.Sprintf("Form validator can only validate structs. Attempted to validate: %v", schemaValue.Kind()))
+		return errors.New(fmt.Sprintf("Form validator can only validate structs and slices"))
 	}
 
 	var object ValidateableFormObject
 	var array ValidateableFormArray
-
 	err := json.Unmarshal(input, &object)
 
 	if err != nil {
@@ -66,18 +77,21 @@ func ValidateSchema(input []byte, output interface{}) error {
 						return err
 					}
 					array.Validate(schemaValue, &typeErrors)
+				} else {
+					return errors.New(fmt.Sprintf("Something went wrong parsing input: %v", err.Error()))
 				}
-				return err
+
+			} else {
+				return errors.New(fmt.Sprintf("Something went wrong parsing input: %v", err.Error()))
 			}
-			return err
 		default:
-			return err
+			return errors.New(fmt.Sprintf("Trying to parse malformed JSON: %v", err.Error()))
 		}
 	} else {
 		object.Validate(schemaValue, &typeErrors)
 	}
 
-	if len(typeErrors.errors) == 0 {
+	if len(typeErrors.Errors) == 0 {
 		return nil
 	}
 
@@ -85,20 +99,20 @@ func ValidateSchema(input []byte, output interface{}) error {
 
 }
 
-
-
-
-
-
 func validateFields(fields map[string]interface{}, schema reflect.Value, typeErrors *TypeErrors) {
 
 	for key, value := range fields {
 		candidateField := reflect.ValueOf(value)
+		var fieldName string
 		schemaField := schema.FieldByNameFunc( func(field string) bool {
-			return bytes.EqualFold([]byte(field), []byte(key))
+			if bytes.EqualFold([]byte(field), []byte(key)) {
+				fieldName = field
+				return true
+			}
+			return false
 		})
 
-		validationError := validateField(schemaField, candidateField, typeErrors)
+		validationError := validateField(schemaField, candidateField, fieldName, typeErrors)
 		if validationError != nil {
 			typeErrors.add(validationError)
 		}
@@ -106,49 +120,37 @@ func validateFields(fields map[string]interface{}, schema reflect.Value, typeErr
 
 }
 
-func validateField(schemaField reflect.Value, candidateField reflect.Value, typeErrors *TypeErrors) error {
+func validateField(schemaField reflect.Value, candidateField reflect.Value, fieldName string, typeErrors *TypeErrors) error {
 
+	// Check if field existed in schema
 	if schemaField.IsValid() {
-		log.Printf("Expected: %v - Candidate: %v", schemaField.Type().Kind(), candidateField.Kind())
+		var k reflect.Kind = schemaField.Kind()
+		switch true {
+			// json.Unmarshal formats all numeric values to float64
+			case 	k == reflect.Int,
+				k == reflect.Int8,
+				k == reflect.Int16,
+				k == reflect.Int32,
+				k == reflect.Int64,
+				k == reflect.Float32,
+				k == reflect.Float64: {
+				if candidateField.Kind() != reflect.Float64 {
+					return NewTypeError(fieldName, fmt.Sprintf("Unexpected type: %v - expected: %v", candidateField.Kind().String(), k))
+				}
+			}
+			case k == reflect.Struct:
+				validateFields(candidateField.Interface().(map[string]interface{}), schemaField, typeErrors)
 
-		switch schemaField.Kind() {
-
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64, reflect.Float32, reflect.Float64:
-			// If interface{} is used, Go parses numeric values to float64.
-			if candidateField.Kind() != reflect.Float64 {
-				return errorMessage(candidateField, schemaField)
+			case k != candidateField.Kind(): {
+				if candidateField.Kind() == reflect.Float64 {
+					return NewTypeError(fieldName, fmt.Sprintf(fieldName + ":" + " Unexpected type: %v - expected: %v", "numeric", schemaField.Kind().String()))
+				}
+				return NewTypeError(fieldName, fmt.Sprintf(fieldName + ":" + " Unexpected type: %v - expected: %v", candidateField.Kind().String(), schemaField.Kind().String()))
 			}
 
-		case reflect.String:
-			if candidateField.Kind() != reflect.String {
-				return errorMessage(candidateField, schemaField)
-			}
 
-		case reflect.Bool:
-			if candidateField.Kind() != reflect.Bool {
-				return errorMessage(candidateField, schemaField)
-			}
-
-		case reflect.Slice: {
-			if candidateField.Kind() != reflect.Slice {
-				return errorMessage(candidateField, schemaField)
-			}
 		}
-		case reflect.Struct:
-			validateFields(candidateField.Interface().(map[string]interface{}), schemaField, typeErrors)
-
-		default:
-			return errorMessage(candidateField, schemaField)
-		}
-
 	}
 	return nil
 }
-
-func errorMessage(actual reflect.Value, expected reflect.Value) error {
-	return errors.New(fmt.Sprintf(expected.String() + ":" + "Unexpected type: %v - expected: %v", actual.Kind().String(), expected.Kind().String()))
-}
-
-
-
 

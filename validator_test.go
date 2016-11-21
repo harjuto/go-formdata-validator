@@ -2,26 +2,26 @@ package form_validator
 
 import (
 	"testing"
+	"encoding/json"
 )
 
-
 func TestInputNotAStruct(t *testing.T) {
-	//var formData ValidateableFormData
-	//err := formData.Validate("test")
-	//
-	//if err.Error() != "Form validator can only validate structs." {
-	//	t.Errorf("Struct type validation failed: %v", err.Error())
-	//}
+	var formData []byte = []byte("{}")
+	err := ValidateSchema(formData, "test")
+
+	if err.Error() != "Form validator can only validate structs and slices" {
+		t.Errorf("Struct type validation failed: %v", err.Error())
+	}
 }
 
 func TestValidateEmptyStruct(t *testing.T) {
-	//var formData ValidateableFormData
-	//type emptyStruct struct {}
-	//err := formData.Validate(emptyStruct{})
-	//
-	//if err != nil {
-	//	t.Errorf("Unexpected result when validating with empty schema struct")
-	//}
+	var formData []byte = []byte("{}")
+	type emptyStruct struct {}
+	err := ValidateSchema(formData, emptyStruct{})
+
+	if err != nil {
+		t.Errorf("Unexpected result when validating with empty schema struct")
+	}
 }
 
 type skill struct {
@@ -111,6 +111,35 @@ var contactDetailsJson []byte = []byte (
 	}`,
 )
 
+var invalidContactDetailsJson []byte = []byte (
+	`{
+		"id": "1",
+		"name": "Leanne Graham",
+		"username": "Bret",
+		"email": "Sincere@april.biz",
+		"address": {
+			"street": "Kulas Light",
+			"suite": "Apt. 556",
+			"city": "Gwenborough",
+			"zipcode": "92998-3874",
+			"geo": {
+				"lat": "-37.3159",
+				"lng": "81.1496"
+			}
+		},
+		"phone": 401234567,
+		"website": "hildegard.org",
+		"company": {
+			"name": "Romaguera-Crona",
+			"catchPhrase": "Multi-layered client-server neural-net",
+			"bs": "harness real-time e-markets"
+		},
+		"skills": {
+				"endorsements": 99,
+				"name": "Go"
+			}
+	}`,
+)
 var accountListJson []byte = []byte (
 	`[
 		{
@@ -208,17 +237,29 @@ var accountListJson []byte = []byte (
 
 
 func TestSchemaValidation(t *testing.T) {
-	//err := ValidateSchema(contactDetailsJson, contactDetailsSchema{})
-	//if err != nil {
-	//	t.Errorf("Failed: %v", err.Error())
-	//}
+	err := ValidateSchema(contactDetailsJson, contactDetailsSchema{})
+	if err != nil {
+		t.Errorf("Failed: %v", err.Error())
+	}
 
-	err := ValidateSchema(accountListJson, AccountListSchema{})
+	err = ValidateSchema(accountListJson, AccountListSchema{})
 
 	if err != nil {
 		t.Errorf("Failed: %v", err.Error())
 	}
+	err = ValidateSchema(invalidContactDetailsJson, contactDetailsSchema{})
+
+	if err == nil {
+		t.Errorf("Failed: %v", "Validator did not detect malformed JSON")
+	}
+	var typeErrors TypeErrors
+	json.Unmarshal([]byte(err.Error()), &typeErrors)
+	if len(typeErrors.Errors) != 3 {
+		t.Errorf("Failed to detect all errors \n")
+	}
 }
+
+
 
 
 
